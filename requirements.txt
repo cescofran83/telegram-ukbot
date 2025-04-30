@@ -1,6 +1,6 @@
 python-telegram-bot[webhooks]==20.7
 gTTS
-openai-whisper
+openai
 ffmpeg-python
 pydub
 python-dotenv
