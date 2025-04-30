@@ -1,6 +1,6 @@
 python-telegram-bot[webhooks]==20.7
 gTTS==2.3.2
-openai==1.14.3
+openai==0.28.1
 pydub==0.25.1
 python-dotenv==1.0.1
 deep-translator==1.11.4
