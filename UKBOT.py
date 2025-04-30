@@ -88,7 +88,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# === AVVIO BOT ===
+# === AVVIO BOT PER RENDER ===
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -96,20 +96,14 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
-    app.run_polling()
-
-if __name__ == "__main__":
-    def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-
     port = int(os.environ.get("PORT", 5000))
+    webhook_url = os.environ.get("RENDER_EXTERNAL_URL")
+
     app.run_webhook(
         listen="0.0.0.0",
         port=port,
-        webhook_url=f"https://{os.environ['RENDER_EXTERNAL_URL']}/"
+        webhook_url=f"{webhook_url}"
     )
 
+if __name__ == "__main__":
+    main()
