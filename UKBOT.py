@@ -99,4 +99,17 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+
+    port = int(os.environ.get("PORT", 5000))
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        webhook_url=f"https://{os.environ['RENDER_EXTERNAL_URL']}/"
+    )
+
