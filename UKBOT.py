@@ -1,7 +1,6 @@
 import os
 import tempfile
 import logging
-import whisper  # rimane per compatibilità locale
 import openai
 from gtts import gTTS
 from dotenv import load_dotenv
