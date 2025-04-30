@@ -19,7 +19,7 @@ from langdetect import detect
 # === CONFIGURAZIONE ===
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
-model = whisper.load_model("tiny")
+model = whisper.load_model("tiny")  # più leggero per Render
 logging.basicConfig(level=logging.INFO)
 
 # === FUNZIONE TRADUZIONE + RISPOSTA VOCALE ===
@@ -43,7 +43,6 @@ async def translate_and_reply(update: Update, text: str):
         f"📝 Testo rilevato ({source_lang}): {text.strip()}\n\n🔁 Traduzione ({target_lang}): {translated.strip()}"
     )
 
-    # Voce nella lingua tradotta
     tts = gTTS(translated, lang=target_lang)
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as audio_file:
         tts.save(audio_file.name)
@@ -57,25 +56,37 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await translate_and_reply(update, update.message.text)
 
-# === GESTIONE VOCALE ===
+# === GESTIONE VOCALE CON LOG ===
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != 'private':
         return
 
-    file = await update.message.voice.get_file()
-    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as ogg_file:
-        await file.download_to_drive(ogg_file.name)
-        ogg_path = ogg_file.name
+    logging.info("🎙️ Ricevuto vocale, inizio download...")
 
-    wav_path = ogg_path.replace(".ogg", ".wav")
-    AudioSegment.from_ogg(ogg_path).export(wav_path, format="wav")
-    result = model.transcribe(wav_path)
-    os.remove(ogg_path)
-    os.remove(wav_path)
+    try:
+        file = await update.message.voice.get_file()
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as ogg_file:
+            await file.download_to_drive(ogg_file.name)
+            ogg_path = ogg_file.name
+            logging.info(f"✅ File scaricato: {ogg_path}")
 
-    await translate_and_reply(update, result["text"])
+        wav_path = ogg_path.replace(".ogg", ".wav")
+        AudioSegment.converter = "/usr/bin/ffmpeg"  # Percorso statico per Render
+        AudioSegment.from_ogg(ogg_path).export(wav_path, format="wav")
+        logging.info(f"🎧 Convertito in WAV: {wav_path}")
 
-# === COMANDO /start CON TASTIERA VISIBILE ===
+        result = model.transcribe(wav_path)
+        logging.info(f"📜 Testo trascritto: {result['text']}")
+
+        os.remove(ogg_path)
+        os.remove(wav_path)
+
+        await translate_and_reply(update, result["text"])
+    except Exception as e:
+        logging.error(f"❌ Errore nella gestione del vocale: {e}")
+        await update.message.reply_text("⚠️ Errore durante l'elaborazione del vocale.")
+
+# === COMANDO /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["/start"]]
     reply_markup = ReplyKeyboardMarkup(
@@ -88,7 +99,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# === AVVIO BOT PER RENDER ===
+# === AVVIO BOT PER RENDER.COM (webhook) ===
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
