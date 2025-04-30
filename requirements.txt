@@ -1,9 +1,8 @@
 python-telegram-bot[webhooks]==20.7
-gTTS
-openai
-ffmpeg-python
-pydub
-python-dotenv
-deep-translator
-langdetect
-imageio-ffmpeg
+gTTS==2.3.2
+openai==1.14.3
+pydub==0.25.1
+python-dotenv==1.0.1
+deep-translator==1.11.4
+langdetect==1.0.9
+imageio-ffmpeg==0.4.8
