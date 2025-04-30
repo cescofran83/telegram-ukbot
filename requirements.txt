@@ -1,0 +1,8 @@
+python-telegram-bot==20.7
+gTTS
+openai-whisper
+ffmpeg-python
+pydub
+python-dotenv
+deep-translator
+langdetect
