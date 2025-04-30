@@ -6,3 +6,4 @@ pydub
 python-dotenv
 deep-translator
 langdetect
+imageio-ffmpeg
