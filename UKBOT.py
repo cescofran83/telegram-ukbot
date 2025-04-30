@@ -19,7 +19,7 @@ from langdetect import detect
 # === CONFIGURAZIONE ===
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
-model = whisper.load_model("base")
+model = whisper.load_model("tiny")
 logging.basicConfig(level=logging.INFO)
 
 # === FUNZIONE TRADUZIONE + RISPOSTA VOCALE ===
