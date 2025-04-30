@@ -1,7 +1,8 @@
 import os
 import tempfile
 import logging
-import whisper
+import whisper  # rimane per compatibilità locale
+import openai
 from gtts import gTTS
 from dotenv import load_dotenv
 from pydub import AudioSegment
@@ -19,7 +20,7 @@ from langdetect import detect
 # === CONFIGURAZIONE ===
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
-model = whisper.load_model("tiny")  # più leggero per Render
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 logging.basicConfig(level=logging.INFO)
 
 # === FUNZIONE TRADUZIONE + RISPOSTA VOCALE ===
@@ -56,7 +57,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await translate_and_reply(update, update.message.text)
 
-# === GESTIONE VOCALE CON LOG ===
+# === GESTIONE VOCALE TRAMITE WHISPER CLOUD (OpenAI) ===
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != 'private':
         return
@@ -70,21 +71,24 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ogg_path = ogg_file.name
             logging.info(f"✅ File scaricato: {ogg_path}")
 
-        wav_path = ogg_path.replace(".ogg", ".wav")
-        AudioSegment.converter = "/usr/bin/ffmpeg"  # Percorso statico per Render
-        AudioSegment.from_ogg(ogg_path).export(wav_path, format="wav")
-        logging.info(f"🎧 Convertito in WAV: {wav_path}")
+        mp3_path = ogg_path.replace(".ogg", ".mp3")
+        AudioSegment.converter = "/usr/bin/ffmpeg"
+        AudioSegment.from_ogg(ogg_path).export(mp3_path, format="mp3")
+        logging.info(f"🎧 Convertito in MP3: {mp3_path}")
 
-        result = model.transcribe(wav_path)
-        logging.info(f"📜 Testo trascritto: {result['text']}")
+        openai.api_key = OPENAI_API_KEY
+        with open(mp3_path, "rb") as audio_file:
+            transcript = openai.Audio.transcribe("whisper-1", audio_file)
+            logging.info(f"📜 Testo trascritto: {transcript['text']}")
 
         os.remove(ogg_path)
-        os.remove(wav_path)
+        os.remove(mp3_path)
 
-        await translate_and_reply(update, result["text"])
+        await translate_and_reply(update, transcript["text"])
+
     except Exception as e:
-        logging.error(f"❌ Errore nella gestione del vocale: {e}")
-        await update.message.reply_text("⚠️ Errore durante l'elaborazione del vocale.")
+        logging.error(f"❌ Errore durante la trascrizione cloud: {e}")
+        await update.message.reply_text("⚠️ Errore durante la trascrizione del vocale.")
 
 # === COMANDO /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -99,7 +103,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# === AVVIO BOT PER RENDER.COM (webhook) ===
+# === AVVIO WEBHOOK PER RENDER.COM ===
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
