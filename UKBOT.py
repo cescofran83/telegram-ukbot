@@ -35,7 +35,8 @@ async def translate_and_reply(update: Update, text: str):
     elif source_lang == 'it':
         target_lang = 'uk'
     else:
-        target_lang = 'uk'
+        await update.message.reply_text("❌ Posso tradurre solo tra italiano e ucraino.")
+        return
 
     translated = GoogleTranslator(source='auto', target=target_lang).translate(text)
 
