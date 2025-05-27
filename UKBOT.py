@@ -22,6 +22,10 @@ TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 logging.basicConfig(level=logging.INFO)
 
+# === UTENTI CON TRADUZIONE FORZATA ===
+forced_uk_users = set()
+forced_ru_users = set()
+
 # === FUNZIONE TRADUZIONE + RISPOSTA VOCALE ===
 async def translate_and_reply(update: Update, text: str):
     try:
@@ -32,10 +36,13 @@ async def translate_and_reply(update: Update, text: str):
 
     if source_lang == 'uk':
         target_lang = 'it'
+    elif source_lang == 'ru':
+        target_lang = 'it'
     elif source_lang == 'it':
         target_lang = 'uk'
     else:
-        target_lang = 'uk'
+        await update.message.reply_text("❌ Posso tradurre solo tra italiano, ucraino e russo.")
+        return
 
     translated = GoogleTranslator(source='auto', target=target_lang).translate(text)
 
@@ -56,7 +63,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await translate_and_reply(update, update.message.text)
 
-# === GESTIONE VOCALE TRAMITE WHISPER CLOUD (OpenAI) ===
+# === GESTIONE VOCALE ===
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != 'private':
         return
@@ -76,10 +83,17 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.info(f"🎧 Convertito in MP3: {mp3_path}")
 
         openai.api_key = OPENAI_API_KEY
-        with open(mp3_path, "rb") as audio_file:
-            transcript = openai.Audio.transcribe("whisper-1", audio_file)
-            logging.info(f"📜 Testo trascritto: {transcript['text']}")
+        user_id = update.message.from_user.id
 
+        with open(mp3_path, "rb") as audio_file:
+            if user_id in forced_uk_users:
+                transcript = openai.Audio.transcribe("whisper-1", audio_file, language="uk")
+            elif user_id in forced_ru_users:
+                transcript = openai.Audio.transcribe("whisper-1", audio_file, language="ru")
+            else:
+                transcript = openai.Audio.transcribe("whisper-1", audio_file)
+
+        logging.info(f"📜 Testo trascritto: {transcript['text']}")
         os.remove(ogg_path)
         os.remove(mp3_path)
 
@@ -89,16 +103,38 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"❌ Errore durante la trascrizione cloud: {e}")
         await update.message.reply_text("⚠️ Errore durante la trascrizione del vocale.")
 
+# === COMANDI PER FORZARE LINGUA ===
+async def force_uk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    forced_uk_users.add(user_id)
+    forced_ru_users.discard(user_id)
+    await update.message.reply_text("✅ Da ora i tuoi vocali saranno trascritti come *ucraini*.")
+
+async def force_ru(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    forced_ru_users.add(user_id)
+    forced_uk_users.discard(user_id)
+    await update.message.reply_text("✅ Da ora i tuoi vocali saranno trascritti come *russi*.")
+
+async def auto_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    forced_uk_users.discard(user_id)
+    forced_ru_users.discard(user_id)
+    await update.message.reply_text("✅ Da ora verrà usato il rilevamento automatico della lingua.")
+
 # === COMANDO /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [["/start"]]
+    keyboard = [["/forzauk", "/forzarusso", "/autolingua"]]
     reply_markup = ReplyKeyboardMarkup(
         keyboard, resize_keyboard=True, one_time_keyboard=False
     )
 
     await update.message.reply_text(
-        "👋 Benvenuto!\nInviami un messaggio o un vocale in italiano o ucraino.\n"
-        "Ti risponderò con la traduzione e la voce nella lingua corretta.",
+        "👋 Benvenuto!\nInviami un messaggio o un vocale in italiano, ucraino o russo.\n"
+        "Ti risponderò con la traduzione e la voce nella lingua corretta.\n\n"
+        "➡️ /forzauk = forza vocale come ucraino\n"
+        "➡️ /forzarusso = forza vocale come russo\n"
+        "➡️ /autolingua = torna al rilevamento automatico",
         reply_markup=reply_markup
     )
 
@@ -107,6 +143,9 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("forzauk", force_uk))
+    app.add_handler(CommandHandler("forzarusso", force_ru))
+    app.add_handler(CommandHandler("autolingua", auto_lang))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
