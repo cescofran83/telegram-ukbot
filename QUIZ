@@ -1,0 +1,199 @@
+import os
+import logging
+import fitz  # PyMuPDF
+import requests
+from bs4 import BeautifulSoup
+from openai import OpenAI
+from telegram import Update, Document, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from dotenv import load_dotenv
+from pathlib import Path
+import json
+
+load_dotenv()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+user_docs = {}
+user_answers = {}
+
+# === UTILITY ===
+def extract_text_from_pdf(pdf_path):
+    text = ""
+    with fitz.open(pdf_path) as doc:
+        for page in doc:
+            text += page.get_text()
+    return text
+
+def extract_text_from_url(url):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        for tag in soup(["script", "style", "header", "footer", "nav", "aside"]):
+            tag.decompose()
+        text = "\n".join(p.get_text(strip=True) for p in soup.find_all(['p', 'h1', 'h2', 'h3', 'li']))
+        return text.strip()
+    except Exception as e:
+        return f"Errore nel recupero della pagina: {str(e)}"
+
+async def summarize_text(text):
+    prompt = f"""Riassumi il seguente testo:\n{text[:4000]}"""
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
+
+async def generate_quiz(text):
+    prompt = f"""
+Fornisci solo un JSON valido. Genera 5 domande a scelta multipla sul testo qui sotto.
+Ogni domanda ha 3 opzioni. Specifica la risposta corretta con l'indice (0,1,2).
+Formato richiesto:
+[
+  {{"domanda": "...", "opzioni": ["...", "...", "..."], "corretta": 1}},
+  ...
+]
+
+Testo:
+{text[:4000]}
+"""
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
+
+# === HANDLERS ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("📄 RIASSUMI", callback_data='riassumi'), InlineKeyboardButton("🧪 QUIZ TEST", callback_data='quiz')],
+        [InlineKeyboardButton("🌐 WEB", callback_data='web')]
+    ]
+    await update.message.reply_text("Benvenuto in Chatbook AI! Inviami un file PDF o incolla un URL da analizzare.", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    doc: Document = update.message.document
+    if doc.mime_type != 'application/pdf':
+        await update.message.reply_text("Per favore inviami un file PDF.")
+        return
+
+    file = await doc.get_file()
+    tmp_path = Path("./tmp")
+    tmp_path.mkdir(exist_ok=True)
+    file_path = tmp_path / f"{doc.file_unique_id}.pdf"
+    await file.download_to_drive(str(file_path))
+
+    text = extract_text_from_pdf(str(file_path))
+    user_docs[update.effective_user.id] = text
+
+    keyboard = [
+        [InlineKeyboardButton("📄 RIASSUMI", callback_data='riassumi'), InlineKeyboardButton("🧪 QUIZ TEST", callback_data='quiz')],
+        [InlineKeyboardButton("🌐 WEB", callback_data='web')]
+    ]
+    await update.message.reply_text("PDF ricevuto! Scegli un'opzione:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if query.data == "web":
+        await query.message.reply_text("Incolla l'URL della pagina web da analizzare:")
+        return
+
+    if user_id not in user_docs:
+        await query.edit_message_text("Devi prima inviarmi un PDF o una pagina web.")
+        return
+
+    if query.data == "riassumi":
+        await query.edit_message_text("Sto generando il riassunto...")
+        summary = await summarize_text(user_docs[user_id])
+        await query.message.reply_text(summary)
+
+    elif query.data == "quiz":
+        await query.edit_message_text("Sto generando il quiz...")
+        try:
+            raw = await generate_quiz(user_docs[user_id])
+            quiz_data = json.loads(raw)
+            context.user_data['quiz'] = quiz_data
+            context.user_data['risposte'] = {}
+            for idx, q in enumerate(quiz_data):
+                buttons = [
+                    [InlineKeyboardButton(f"{chr(65+i)}", callback_data=f"quiz_{idx}_{i}") for i in range(len(q['opzioni']))]
+                ]
+                testo_domanda = f"Domanda {idx+1}: {q['domanda']}\n\n"
+                for i, opt in enumerate(q['opzioni']):
+                    testo_domanda += f"{chr(65+i)}. {opt}\n"
+                await query.message.reply_text(testo_domanda.strip(), reply_markup=InlineKeyboardMarkup(buttons))
+            await query.message.reply_text("Hai completato il quiz? Premi INVIA.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📩 INVIA", callback_data='invia_quiz')]]))
+        except Exception as e:
+            await query.message.reply_text("Errore nel parsing del quiz: " + str(e))
+
+async def handle_quiz_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, idx, opt = query.data.split('_')
+    idx, opt = int(idx), int(opt)
+    context.user_data['risposte'][idx] = opt
+    await query.message.reply_text(f"✅ Domanda {idx+1}: risposta salvata ({chr(65+opt)})")
+
+async def submit_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    quiz = context.user_data.get('quiz', [])
+    risposte = context.user_data.get('risposte', {})
+    punteggio = 0
+    risultati = []
+    for i, domanda in enumerate(quiz):
+        corretta = domanda['corretta']
+        scelta = risposte.get(i, None)
+        if scelta == corretta:
+            punteggio += 1
+            risultati.append(f"✅ Domanda {i+1}: CORRETTA")
+        else:
+            corretta_txt = domanda['opzioni'][corretta]
+            scelta_txt = domanda['opzioni'][scelta] if scelta is not None else "-"
+            risultati.append(f"❌ Domanda {i+1}: ERRATA\n   ✔️ {corretta_txt}\n   ✖️ {scelta_txt}")
+    risultati.append(f"\n📊 Punteggio: {punteggio}/{len(quiz)}")
+    await query.message.reply_text("\n".join(risultati))
+
+async def handle_text_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+    if text.startswith("http://") or text.startswith("https://"):
+        await update.message.reply_text("Sto recuperando la pagina web...")
+        extracted = extract_text_from_url(text)
+        user_docs[user_id] = extracted
+        keyboard = [
+            [InlineKeyboardButton("📄 RIASSUMI", callback_data='riassumi'), InlineKeyboardButton("🧪 QUIZ TEST", callback_data='quiz')]
+        ]
+        await update.message.reply_text("Pagina web caricata! Scegli un'opzione:", reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await update.message.reply_text("Messaggio ricevuto, ma non sembra essere un URL valido.")
+
+async def handle_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in user_docs:
+        await update.message.reply_text("Devi prima inviarmi un PDF o una pagina web.")
+        return
+    await update.message.reply_text("Sto generando il riassunto...")
+    summary = await summarize_text(user_docs[user_id])
+    await update.message.reply_text(summary)
+
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("riassumi", handle_summary))
+    app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
+    app.add_handler(CallbackQueryHandler(button_handler, pattern='^(riassumi|quiz|web)$'))
+    app.add_handler(CallbackQueryHandler(handle_quiz_response, pattern='^quiz_'))
+    app.add_handler(CallbackQueryHandler(submit_quiz, pattern='^invia_quiz$'))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text_url))
+
+    logger.info("Bot in avvio...")
+    app.run_polling()
